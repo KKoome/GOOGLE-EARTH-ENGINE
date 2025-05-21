@@ -1,0 +1,135 @@
+// 1. Loading the boundary of  Kajiado County  using FAO datasets
+var counties = ee.FeatureCollection('FAO/GAUL/2015/level2');
+var kajiado = counties.filter(ee.Filter.eq('ADM2_NAME', 'Kajiado'));
+Map.centerObject(kajiado, 8);
+Map.addLayer(kajiado, {}, 'Kajiado');
+
+// 2. Loading of  Sentinel-2 imagery
+var image = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(kajiado)
+  .filterDate('2023-01-01', '2023-12-31')
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+  .median()
+  .clip(kajiado);
+
+// 3. Selection of the bands for classification
+var bands = ['B2', 'B3', 'B4', 'B8']; // Blue, Green, Red, NIR
+var imageRGB = image.select(bands);
+Map.addLayer(imageRGB, {min: 0, max: 3000, bands: ['B4', 'B3', 'B2']}, 'Sentinel-2');
+
+// 4.Training points
+// Wetland - 0
+var wetland = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point(36.730, -1.853), {'landcover': 0}),
+  ee.Feature(ee.Geometry.Point(36.740, -1.848), {'landcover': 0})
+]);
+
+// Vegetation - 1
+var vegetation = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point(36.820, -1.775), {'landcover': 1}),
+  ee.Feature(ee.Geometry.Point(36.836, -1.782), {'landcover': 1})
+]);
+
+// Built-up - 2
+var builtup = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point(36.795, -1.673), {'landcover': 2}),
+  ee.Feature(ee.Geometry.Point(36.810, -1.678), {'landcover': 2})
+]);
+
+// Barren - 3
+var barren = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point(36.905, -1.859), {'landcover': 3}),
+  ee.Feature(ee.Geometry.Point(36.920, -1.865), {'landcover': 3})
+]);
+
+// Forest - 4
+var forest = ee.FeatureCollection([
+  ee.Feature(ee.Geometry.Point(36.945, -1.795), {'landcover': 4}),
+  ee.Feature(ee.Geometry.Point(36.950, -1.780), {'landcover': 4})
+]);
+
+// Merging the training data
+var trainingSamples = wetland.merge(vegetation).merge(builtup).merge(barren).merge(forest);
+
+// 5. Sample training
+var training = imageRGB.sampleRegions({
+  collection: trainingSamples,
+  properties: ['landcover'],
+  scale: 10
+});
+
+// 6. Training using the Random Forest classifier
+var classifier = ee.Classifier.smileRandomForest(50).train({
+  features: training,
+  classProperty: 'landcover',
+  inputProperties: bands
+});
+
+// 7. Classifying the image
+var classified = imageRGB.classify(classifier);
+
+// 8. Defination of class names and color preferred for each class
+var classNames = ['Wetland', 'Vegetation', 'Built-up', 'Barren', 'Forested'];
+var palette = ['0000FF', '00FF00', 'FF0000', 'F5DEB3', '006400'];
+
+// 9. Add classified image to map
+Map.addLayer(classified, {min: 0, max: 4, palette: palette}, 'LULC Classification');
+
+// ---------------------------
+// 10. Add Title and Legend
+// ---------------------------
+
+var title = ui.Label({
+  value: 'Kajiado County Landuse Landcover Map',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '20px',
+    margin: '10px 5px'
+  }
+});
+Map.add(title);
+
+// Create a panel for the legend
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+// Legend Title
+var legendTitle = ui.Label({
+  value: 'Legend',
+  style: {fontWeight: 'bold', fontSize: '16px', margin: '0 0 6px 0'}
+});
+legend.add(legendTitle);
+
+var makeRow = function(color, name) {
+  var colorBox = ui.Label('', {
+    backgroundColor: '#' + color,
+    padding: '8px',
+    margin: '0 0 4px 0'
+  });
+  var description = ui.Label(name, {margin: '0 0 4px 6px'});
+  return ui.Panel([colorBox, description], ui.Panel.Layout.Flow('horizontal'));
+};
+
+// Add legend entries
+for (var i = 0; i < classNames.length; i++) {
+  legend.add(makeRow(palette[i], classNames[i]));
+}
+
+// Add legend to map
+Map.add(legend);
+
+// ---------------------------
+// 11. Exporting to Drive as tiff for further analysis in various geospatial softwares
+// ---------------------------
+Export.image.toDrive({
+  image: classified,
+  description: 'Kajiado_LULC',
+  folder: 'GEE_Exports',
+  region: kajiado.geometry(),
+  scale: 10,
+  maxPixels: 1e13
+});
