@@ -1,0 +1,28 @@
+var kenya = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017')
+              .filter(ee.Filter.eq('country_na', 'Kenya'));
+
+var chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY')
+              .filterDate('2025-03-01', '2025-04-01')
+              .filterBounds(kenya);
+
+var marchRain = chirps.sum().clip(kenya);
+
+var visParams = {
+  min: 0,
+  max: 300, // adjust based on your area – this sets upper limit of rainfall scale in mm
+  palette: ['white', 'blue', 'darkblue', 'purple']
+};
+
+Map.centerObject(kenya, 6);
+Map.addLayer(marchRain, visParams, 'March 2025 Rainfall (CHIRPS)');
+Map.addLayer(kenya, {color: 'black'}, 'Kenya Boundary');
+
+Export.image.toDrive({
+  image: marchRain,
+  description: 'Kenya_March2025_Rainfall_CHIRPS',
+  folder: 'GEE_Exports',
+  fileNamePrefix: 'Kenya_March2025_Rainfall',
+  region: kenya.geometry(),
+  scale: 5000,
+  maxPixels: 1e13
+});
